@@ -1,0 +1,10 @@
+# @martin/dsh-model-dial — bundle patch: one host row.
+#
+# The host half (lib/index.js) polls the local llama-server /slots endpoint
+# every 750 ms and tails the newest llama-server-*.log; it publishes the
+# modelDial.status Remote that the header-corner dial reads. The client row
+# (lib/client.js) is derived from this package's dsh.client declaration, so
+# only the host row needs an entry here.
+- insert:
+  - id: model-dial
+    name: '@martin/dsh-model-dial'

@@ -1,0 +1,57 @@
+{
+  "name": "@martin/dsh-model-dial",
+  "version": "0.1.0",
+  "description": "DSH web plugin: live prompt-processing progress and generation status from a local llama.cpp server.",
+  "author": "Martin Dye",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "bundle": "tsdown"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.31",
+    "react": "18.2.0",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.6.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "external": [
+        "@deepseek-ai/cordis",
+        "react",
+        "react/jsx-runtime"
+      ]
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/martindye/dsh-model-dial.git"
+  },
+  "homepage": "https://github.com/martindye/dsh-model-dial#readme",
+  "bugs": {
+    "url": "https://github.com/martindye/dsh-model-dial/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
