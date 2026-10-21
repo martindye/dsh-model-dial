@@ -1,7 +1,7 @@
 {
   "name": "@martin/dsh-model-dial",
   "version": "0.1.0",
-  "description": "DSH web plugin: live prompt-processing progress and generation status from a local llama.cpp server.",
+  "description": "Live dial for the local 27B in the DSH web app: prefill progress, decode speed and context size, fed by llama-server /slots plus a tail of its log file.",
   "author": "Martin Dye",
   "type": "module",
   "main": "lib/index.js",
