@@ -1,9 +1,10 @@
 /**
  * The dial itself: a 34px progress gauge in the session header.
  *   processing -> amber ring filling with the server's own progress %, % in the middle
+ *   compacting -> amber arc circling slowly (the harness summarises old context)
  *   otherwise  -> grey ring with a dot (idle, generating, or server down)
- * A small task label ("prompt processing" / "generating") sits to the right
- * while work is active, and nothing when idle.
+ * A small task label ("prompt processing" / "generating" / "compacting")
+ * sits to the right while work is active, and nothing when idle.
  * No speeds and no totals on the dial — those already live in the app's bar.
  */
 import { useEffect, useState } from 'react'
@@ -39,24 +40,32 @@ export function Dial({ status }: DialProps) {
     && st.progressAt !== null && st.progressAt !== undefined
     && st.prefillPercent !== null
     && Date.now() - st.progressAt < LIVE_MS
-  const color = gauge ? '#f59e0b' : '#6b7280'
+  /** Harness summarising the old context (a few minutes of model time). */
+  const compacting = st?.compacting === true
+  /** Compacting without a fresh prefill line: an amber arc circles slowly. */
+  const spin = compacting && !gauge
+  const color = gauge || spin ? '#f59e0b' : '#6b7280'
   const arc = gauge ? Math.min(1, Math.max(0.02, pct)) : 0
   const center = gauge ? `${Math.round(pct * 100)}%` : ''
   /** Small task label shown to the right of the ring while work is active. */
-  const label = gauge ? 'prompt processing' : st?.phase === 'decode' ? 'generating' : ''
-  const title = gauge
-    ? `Processing prompt · ${Math.round(pct * 100)}%`
-    : st?.phase === 'decode'
-      ? 'Generating'
-      : st?.phase === 'down'
-        ? 'Model server unreachable at 127.0.0.1:8080'
-        : 'No active processing'
+  const label = compacting ? 'compacting'
+    : gauge ? 'prompt processing'
+      : st?.phase === 'decode' ? 'generating' : ''
+  const title = compacting
+    ? 'Compacting the prompt (summarising old context)'
+    : gauge
+      ? `Processing prompt · ${Math.round(pct * 100)}%`
+      : st?.phase === 'decode'
+        ? 'Generating'
+        : st?.phase === 'down'
+          ? 'Model server unreachable at 127.0.0.1:8080'
+          : 'No active processing'
 
   return (
     <div
       style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: 1 }}
       title={title}
-      data-model-dial={gauge ? 'progress' : (st?.phase ?? 'idle')}
+      data-model-dial={compacting ? 'compacting' : gauge ? 'progress' : (st?.phase ?? 'idle')}
     >
       <svg width={34} height={34} viewBox="0 0 34 34" aria-hidden="true">
         <circle cx={17} cy={17} r={R} fill="none" stroke="currentColor" strokeOpacity={0.15} strokeWidth={3} />
@@ -73,6 +82,28 @@ export function Dial({ status }: DialProps) {
             transform="rotate(-90 17 17)"
           />
         )}
+        {spin && (
+          <g>
+            <circle
+            cx={17}
+            cy={17}
+            r={R}
+            fill="none"
+            stroke={color}
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeDasharray={`${CIRC * 0.25} ${CIRC}`}
+            />
+            <animateTransform
+              attributeName="transform"
+              type="rotate"
+              from="0 17 17"
+              to="360 17 17"
+              dur="1.4s"
+              repeatCount="indefinite"
+            />
+          </g>
+        )}
         {gauge ? (
           <text
             x={17}
@@ -84,7 +115,7 @@ export function Dial({ status }: DialProps) {
           >
             {center}
           </text>
-        ) : (
+        ) : !spin && (
           <circle cx={17} cy={17} r={3} fill="#6b7280" opacity={0.6} />
         )}
       </svg>

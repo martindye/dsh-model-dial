@@ -25,4 +25,6 @@ export interface ModelStatus {
   decoded: number | null
   /** Rolling 3-second decode speed, tokens per second. */
   decodeTps: number | null
+  /** The harness is compacting the prompt (summarising the old context). */
+  compacting: boolean
 }

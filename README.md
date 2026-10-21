@@ -1,56 +1,53 @@
 # @martin/dsh-model-dial
 
-A small live progress dial in the DSH web app's session header, beside the existing actions. It reads a local llama.cpp server's status and diagnostic log without controlling the model.
+Live dial for the local 27B, shown in the DSH web app's session header corner.
 
-- Fresh prompt-processing progress: amber ring, percentage and a small “prompt processing” label.
-- Generation: grey dot with a “generating” label.
-- Idle, unavailable or stale progress: grey dot; hover for status.
+The llama-server (llama.cpp, TurboQuant build) streams no progress over HTTP,
+but it tells the truth in two places this plugin reads:
 
-The current UI deliberately leaves speeds and token totals to the app's existing status bar. The host snapshot also includes task ID, token counts and throughput when those values are available.
+- `GET http://127.0.0.1:8080/slots` — phase (idle / prefill / decode), task id,
+  context size, prompt tokens processed, tokens decoded.
+- the server's own log file (`llama-server-*.log`, UTF-16, under the
+  TurboQuantLlamaCppSetup logs dir) — the `print_timing` lines carry the
+  prefill **progress %**, prompt tokens/s, and the decode `tg_3s` rate that
+  the DOS window shows.
 
-## How it works
+Host half (`lib/index.js`, runs in the DSH host process): polls `/slots` every
+750 ms and tails the newest log file, then publishes one Remote,
+`modelDial.status()`, returning a small frozen status object. The dial is
+decorative: a dead server just reports `phase: "down"`.
 
-The host polls `http://127.0.0.1:8080/slots` every 750 ms and reads newly appended bytes from the newest `llama-server-*.log`. It publishes a `modelDial.status` Remote. The browser polls this snapshot every second and registers a 34 px gauge in `conversation.session.header.actions`, leaving the app's corner controls alone.
+Client half (`lib/client.js`, browser): a 34 px ring in the session header
+corner (same slot the voice toggles use).
 
-Log parsing expects the UTF-16LE files and task progress/timing format used by the tested Windows TurboQuant llama.cpp installation. Other builds may expose different slot fields or log formats. Without matching fresh log progress, the gauge stays grey. An unavailable server reports `down`; polling errors are contained.
+  - prefill: amber ring filling to the server's own progress %, % in the
+    middle, `tokens · tok/s` underneath
+  - decode:  green ring, generated-token count in the middle, tok/s underneath
+  - idle:    grey ring, dot
+  - down:    red ring, `!`
 
-This plugin does not start, stop or resize a model, send inference requests, change CUDA graphs or select a voice device. It can be used alongside [@martin/dsh-local-model-manager](https://github.com/martindye/dsh-local-model-manager).
+Hover for the full line (task id, context size, ...).
 
-## Install
+## Build
 
-The repository includes built `lib/` files, sources and the host bundle patch. From a DSH checkout:
-
-```text
-pnpm dsh plugin --profile web add <path-to-dsh-model-dial-directory-or-tgz>
+```
+pnpm install
+pnpm bundle     # -> lib/index.js (host) + lib/client.js (browser)
 ```
 
-Restart the web host after active work finishes, then refresh the browser. The package name is `@martin/dsh-model-dial`; the bundle row ID is `model-dial`. Keep the `dsh.bundle.patch` declaration and `cordis.patch.yml` in the package: they register the host service the browser needs.
+## Install (this machine)
 
-## Configuration
+1. web profile package.json: link dependency + `dsh.profile.bundles` entry
+2. junction `~/.dsh/profiles/web/node_modules/@martin/dsh-model-dial` -> this repo
+3. restart the web host (the dial appears after a page refresh)
 
-Environment overrides are read when the host loads the plugin:
+The package must keep its `dsh.bundle.patch` declaration (pointing at
+`cordis.patch.yml`, which inserts the one host row) — without it the host
+silently skips the whole bundle with "declares no dsh.bundle" and the dial
+never appears. Changes to package.json or the patch need a web-host restart;
+rebuilt `lib/` client bundles are picked up on a plain page refresh.
 
-| Variable | Default |
-| --- | --- |
-| `DSH_DIAL_PORT` | `8080`, on `127.0.0.1`. |
-| `DSH_DIAL_LOG_DIR` | `OneDrive/Projects/TurboQuantLlamaCppSetup/logs` beneath the current user's home directory. |
+## Config (env overrides, read at host start)
 
-The default log directory matches the existing Windows installation without embedding a particular user's name. For another installation, set an absolute log directory and use a server with the expected slot and log formats. This release has not established a platform or backend compatibility matrix.
-
-## Build and package
-
-Use Node.js 22.12 or newer with pnpm:
-
-```text
-pnpm install --frozen-lockfile
-pnpm bundle
-npm pack
-```
-
-The build produces the host ESM module and a browser factory registered with DSH's module loader. React and Cordis runtime modules are supplied by DSH. `npm pack` includes the compiled modules, source, README, license and bundle patch; dependency folders and local logs are excluded.
-
-Publication checks validate the isolated build, JavaScript syntax and archive contents. They do not reload the installed plugin or perform inference on the active model.
-
-## License
-
-MIT, copyright 2026 Martin Dye.
+- `DSH_DIAL_PORT` — llama-server port, default 8080
+- `DSH_DIAL_LOG_DIR` — log dir, default the TurboQuantLlamaCppSetup logs dir

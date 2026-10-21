@@ -10,15 +10,24 @@
  * and a dead server simply reports phase "down".
  */
 import { closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { homedir } from 'node:os'
 import type { ModelStatus } from './model.ts'
+import {
+  findNewestSessionLog,
+  framesToText,
+  parseCompactionEvents,
+  scanZstdFrames,
+} from './sessionlog.ts'
 
 const PORT = Number(process.env.DSH_DIAL_PORT ?? 8080)
-const LOG_DIR = process.env.DSH_DIAL_LOG_DIR ?? path.join(homedir(), 'OneDrive', 'Projects', 'TurboQuantLlamaCppSetup', 'logs')
+const LOG_DIR = process.env.DSH_DIAL_LOG_DIR ?? 'C:/Users/press/OneDrive/Projects/TurboQuantLlamaCppSetup/logs'
+const SESSIONS_DIR = process.env.DSH_DIAL_SESSIONS_DIR ?? path.join(os.homedir(), '.dsh', 'sessions')
 const SLOTS_URL = `http://127.0.0.1:${PORT}/slots`
 const POLL_MS = 750
 const STALE_MS = 4000
+/** A compaction without its end event is dropped after this long. */
+const COMPACT_TTL_MS = 15 * 60_000
 const REMOTE_METHODS_KEY = '@deepseek-ai/dsh-typert-protocol/remote-methods'
 
 interface PrefillLine { task: number; tokens: number; percent: number; tps: number; at: number }
@@ -34,6 +43,7 @@ const IDLE: Omit<ModelStatus, 'phase' | 'at'> = {
   progressAt: null,
   decoded: null,
   decodeTps: null,
+  compacting: false,
 }
 
 class ModelDialController {
@@ -52,6 +62,10 @@ class ModelDialController {
   private prefillLine: PrefillLine | null = null
   private decodeLine: DecodeLine | null = null
   private timer: NodeJS.Timeout | null = null
+  private sessionFile: string | null = null
+  private sessionOffset = 0
+  private compactingId: string | null = null
+  private compactingSince: number | null = null
 
   constructor() {
     this.timer = setInterval(() => {
@@ -71,6 +85,7 @@ class ModelDialController {
     try {
       const slot = await this.fetchSlot()
       this.scanLog()
+      this.scanSessionLog()
       this.synthesize(slot)
     } finally {
       this.ticking = false
@@ -146,6 +161,75 @@ class ModelDialController {
     if (this.tail.length > 65536) this.tail = this.tail.slice(-8192)
   }
 
+  /**
+   * Tail newly appended zstd frames of the active session log and track
+   * prompt compaction: compaction/start … compaction/end bracket a few
+   * minutes of model time summarising the old context.
+   */
+  private scanSessionLog(): void {
+    const file = findNewestSessionLog(SESSIONS_DIR)
+    if (!file) return
+    if (this.sessionFile !== file) {
+      this.sessionFile = file
+      this.sessionOffset = -1 // attach at EOF on first sight: no history replay
+      this.compactingSince = null
+    }
+    let size: number
+    try {
+      size = statSync(file).size
+    } catch {
+      return
+    }
+    if (this.sessionOffset < 0) {
+      this.sessionOffset = size
+      return
+    }
+    if (size < this.sessionOffset) {
+      this.sessionOffset = size // file replaced or truncated: re-attach
+      return
+    }
+    if (size === this.sessionOffset) return
+    let fd: number
+    try {
+      fd = openSync(file, 'r')
+    } catch {
+      return
+    }
+    try {
+      const len = Math.min(size - this.sessionOffset, 1 << 20)
+      const buf = Buffer.alloc(len)
+      const read = readSync(fd, buf, 0, len, this.sessionOffset)
+      const chunk = buf.subarray(0, read)
+      const { frames, next } = scanZstdFrames(chunk, 0)
+      if (frames.length > 0) {
+        for (const e of parseCompactionEvents(framesToText(chunk, frames))) {
+          if (e.kind === 'start') {
+            this.compactingId = e.id
+            this.compactingSince = e.time
+          } else if (this.compactingId === null || e.id === null || this.compactingId === e.id) {
+            this.compactingId = null
+            this.compactingSince = null
+          }
+        }
+      }
+      this.sessionOffset += next
+    } catch {
+      /* the dial must never take the host down with it */
+    } finally {
+      closeSync(fd)
+    }
+  }
+
+  /** True while a compaction from the session log is still running. */
+  private isCompacting(): boolean {
+    if (this.compactingSince === null) return false
+    if (Date.now() - this.compactingSince > COMPACT_TTL_MS) {
+      this.compactingSince = null // end event lost; never amber forever
+      return false
+    }
+    return true
+  }
+
   private parseLine(line: string): void {
     const now = Date.now()
     let m = line.match(
@@ -177,19 +261,20 @@ class ModelDialController {
 
   private synthesize(slot: Record<string, unknown> | null): void {
     const now = Date.now()
+    const compacting = this.isCompacting()
     const stale = !slot || now - this.slotsAt > STALE_MS
     const s = (slot ?? {}) as Record<string, unknown>
     const task = typeof s.id_task === 'number' ? s.id_task : null
     const contextTokens = typeof s.n_prompt_tokens === 'number' ? s.n_prompt_tokens : null
     if (stale) {
-      this.state = { phase: 'down', at: now, ...IDLE }
+      this.state = { phase: 'down', at: now, ...IDLE, compacting }
       return
     }
     const nextToken = (s.next_token as Array<Record<string, unknown>> | undefined)?.[0]
     const decoded = typeof nextToken?.n_decoded === 'number' ? nextToken.n_decoded : 0
     const processed = typeof s.n_prompt_tokens_processed === 'number' ? s.n_prompt_tokens_processed : null
     if (s.is_processing !== true) {
-      this.state = { phase: 'idle', at: now, ...IDLE, contextTokens }
+      this.state = { phase: 'idle', at: now, ...IDLE, contextTokens, compacting }
       return
     }
     if (decoded > 0) {
@@ -206,6 +291,7 @@ class ModelDialController {
         progressAt: null,
         decoded,
         decodeTps: dl?.tg3 ?? null,
+        compacting,
       }
       return
     }
@@ -222,6 +308,7 @@ class ModelDialController {
       progressAt: pl ? pl.at : null,
       decoded: null,
       decodeTps: null,
+      compacting,
     }
   }
 }
@@ -241,4 +328,12 @@ interface HostContext {
 
 export function apply(ctx: HostContext): void {
   ctx.provide('modelDialController', new ModelDialController())
+}
+
+/** Session-log helpers, exported for the deploy probe (not part of the Remote). */
+export const _internals = {
+  findNewestSessionLog,
+  scanZstdFrames,
+  framesToText,
+  parseCompactionEvents,
 }
