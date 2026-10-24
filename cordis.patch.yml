@@ -1,4 +1,4 @@
-# @martin/dsh-model-dial — bundle patch: one host row.
+# @martindye/dsh-model-dial — bundle patch: one host row.
 #
 # The host half (lib/index.js) polls the local llama-server /slots endpoint
 # every 750 ms and tails the newest llama-server-*.log; it publishes the
@@ -7,4 +7,4 @@
 # only the host row needs an entry here.
 - insert:
   - id: model-dial
-    name: '@martin/dsh-model-dial'
+    name: '@martindye/dsh-model-dial'

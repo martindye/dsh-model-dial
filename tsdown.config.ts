@@ -1,12 +1,12 @@
 /**
- * Standalone build for @martin/dsh-model-dial (same two-pass layout as
- * @martin/dsh-voice): the node half, lib/index.js, and the browser client
+ * Standalone build for @martindye/dsh-model-dial (same two-pass layout as
+ * @martindye/dsh-voice): the node half, lib/index.js, and the browser client
  * bundle, lib/client.js, a CJS closure factory registered with the host's
  * module loader. No CSS modules here: the dial styles itself inline.
  */
 import { defineConfig } from 'tsdown'
 
-const ID = '@martin/dsh-model-dial'
+const ID = '@martindye/dsh-model-dial'
 
 /** Platform modules the host's module table provides; everything else inlines. */
 const EXTERNALS = new Set(['react', 'react/jsx-runtime', '@deepseek-ai/cordis'])
