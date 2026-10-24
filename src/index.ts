@@ -28,6 +28,8 @@ const POLL_MS = 750
 const STALE_MS = 4000
 /** A compaction without its end event is dropped after this long. */
 const COMPACT_TTL_MS = 15 * 60_000
+/** Trailing window replayed when attaching to a (new) session log. */
+const REPLAY_BYTES = 1 << 20
 const REMOTE_METHODS_KEY = '@deepseek-ai/dsh-typert-protocol/remote-methods'
 
 interface PrefillLine { task: number; tokens: number; percent: number; tps: number; at: number }
@@ -171,8 +173,9 @@ class ModelDialController {
     if (!file) return
     if (this.sessionFile !== file) {
       this.sessionFile = file
-      this.sessionOffset = -1 // attach at EOF on first sight: no history replay
-      this.compactingSince = null
+      // Attach at EOF on first sight; a live compaction flag survives the
+      // switch (it expires via its own TTL) and replayTail re-derives it.
+      this.sessionOffset = -1
     }
     let size: number
     try {
@@ -182,6 +185,10 @@ class ModelDialController {
     }
     if (this.sessionOffset < 0) {
       this.sessionOffset = size
+      // The event that just made this file the newest (often a
+      // compaction/start), or a compaction already in flight, sits right at
+      // the attach point: replay the trailing window so it is not swallowed.
+      this.replayTail(file, size)
       return
     }
     if (size < this.sessionOffset) {
@@ -202,17 +209,48 @@ class ModelDialController {
       const chunk = buf.subarray(0, read)
       const { frames, next } = scanZstdFrames(chunk, 0)
       if (frames.length > 0) {
-        for (const e of parseCompactionEvents(framesToText(chunk, frames))) {
-          if (e.kind === 'start') {
-            this.compactingId = e.id
-            this.compactingSince = e.time
-          } else if (this.compactingId === null || e.id === null || this.compactingId === e.id) {
-            this.compactingId = null
-            this.compactingSince = null
-          }
-        }
+        for (const e of parseCompactionEvents(framesToText(chunk, frames))) this.applyCompactionEvent(e)
       }
       this.sessionOffset += next
+    } catch {
+      /* the dial must never take the host down with it */
+    } finally {
+      closeSync(fd)
+    }
+  }
+
+  /** Feed one compaction event into the start/end state machine. */
+  private applyCompactionEvent(e: { kind: 'start' | 'end'; id: string | null; time: number | null }): void {
+    if (e.kind === 'start') {
+      this.compactingId = e.id
+      this.compactingSince = e.time
+    } else if (this.compactingId === null || e.id === null || this.compactingId === e.id) {
+      this.compactingId = null
+      this.compactingSince = null
+    }
+  }
+
+  /**
+   * Re-read the trailing window of a freshly attached session log and
+   * replay its compaction events, so a compaction that began (or is in
+   * flight) before the attach still lights the dial.
+   */
+  private replayTail(file: string, size: number): void {
+    if (size === 0) return
+    const from = Math.max(0, size - REPLAY_BYTES)
+    let fd: number
+    try {
+      fd = openSync(file, 'r')
+    } catch {
+      return
+    }
+    try {
+      const buf = Buffer.alloc(size - from)
+      const read = readSync(fd, buf, 0, size - from, from)
+      const { frames } = scanZstdFrames(buf, 0)
+      if (frames.length > 0) {
+        for (const e of parseCompactionEvents(framesToText(buf, frames))) this.applyCompactionEvent(e)
+      }
     } catch {
       /* the dial must never take the host down with it */
     } finally {
