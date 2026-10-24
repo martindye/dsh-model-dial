@@ -70,6 +70,10 @@ nothing.
 
 ## Changelog (the latest updates)
 
+- 1.0.1 (24/10) — "starting model": while the model manager cold-starts
+  the server (the request is held, a few minutes), the ring spins amber
+  with a "starting model" label instead of reading "down". Reads the
+  manager's launch state off its new `/health` endpoint.
 - 24/10 — The compaction ring shows a live percentage: summary tokens
   generated over the summarisation budget, read straight off the model
   slot; the blind spin now only covers the first seconds.

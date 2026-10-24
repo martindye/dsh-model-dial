@@ -19,6 +19,10 @@ README.md, LICENSE). `lib/` is included on purpose — the published
 package ships prebuilt, so `dsh plugin add` needs no build step.
 
 ## Version history
+- 1.0.1 (24/10): "starting model" face — while the model manager
+  cold-starts the local server (holding the request), the dial spins amber
+  with a "starting model" label instead of reading "down". Reads the
+  manager's new `GET /health` launch state.
 - 1.0.0 (24/10): first public version (renamed from @martin/dsh-model-dial)
   — the prefill gauge, the generating label, and the compaction indicator
   with the live summary percentage, all in one 34 px ring.

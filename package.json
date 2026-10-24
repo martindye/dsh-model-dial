@@ -1,6 +1,6 @@
 {
   "name": "@martindye/dsh-model-dial",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Live dial for the local llama.cpp model in the DSH web app: a 34 px progress ring in the session header showing prompt processing, generation, and prompt compaction (with the summary's live percentage), fed by llama-server /slots, a tail of its log, and the DSH session log.",
   "author": "Martin Dye",
   "type": "module",
