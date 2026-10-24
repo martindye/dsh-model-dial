@@ -27,4 +27,11 @@ export interface ModelStatus {
   decodeTps: number | null
   /** The harness is compacting the prompt (summarising the old context). */
   compacting: boolean
+  /**
+   * Summary progress of a running compaction, 0..1: tokens generated over
+   * the summarisation budget (the summarisation request's own max_tokens,
+   * as the slot reports it). Null while the slot is idle or the server is
+   * down — the dial falls back to its blind spin.
+   */
+  compactPercent: number | null
 }

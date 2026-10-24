@@ -1,7 +1,10 @@
 /**
  * The dial itself: a 34px progress gauge in the session header.
  *   processing -> amber ring filling with the server's own progress %, % in the middle
- *   compacting -> amber arc circling slowly (the harness summarises old context)
+ *   compacting -> amber ring at the summary % (generated tokens over the
+ *                  summarisation budget), % in the middle; blind slow spin
+ *                  while that percent is unknown (the harness summarises
+ *                  old context)
  *   otherwise  -> grey ring with a dot (idle, generating, or server down)
  * A small task label ("prompt processing" / "generating" / "compacting")
  * sits to the right while work is active, and nothing when idle.
@@ -42,17 +45,31 @@ export function Dial({ status }: DialProps) {
     && Date.now() - st.progressAt < LIVE_MS
   /** Harness summarising the old context (a few minutes of model time). */
   const compacting = st?.compacting === true
-  /** Compacting without a fresh prefill line: an amber arc circles slowly. */
-  const spin = compacting && !gauge
-  const color = gauge || spin ? '#f59e0b' : '#6b7280'
-  const arc = gauge ? Math.min(1, Math.max(0.02, pct)) : 0
-  const center = gauge ? `${Math.round(pct * 100)}%` : ''
+  const compactRaw = st?.compactPercent ?? null
+  const compactPct = typeof compactRaw === 'number' && Number.isFinite(compactRaw) ? compactRaw : null
+  /** Compacting with a summary percent: static amber ring, % in the middle. */
+  const compactGauge = compacting && !gauge && compactPct !== null
+  /** Compacting without a percent to show: an amber arc circles slowly. */
+  const spin = compacting && !gauge && !compactGauge
+  const color = gauge || spin || compactGauge ? '#f59e0b' : '#6b7280'
+  const arc = gauge
+    ? Math.min(1, Math.max(0.02, pct))
+    : compactGauge && compactPct !== null
+      ? Math.min(1, Math.max(0.02, compactPct))
+      : 0
+  const center = gauge
+    ? `${Math.round(pct * 100)}%`
+    : compactGauge && compactPct !== null
+      ? `${Math.round(compactPct * 100)}%`
+      : ''
   /** Small task label shown to the right of the ring while work is active. */
   const label = compacting ? 'compacting'
     : gauge ? 'prompt processing'
       : st?.phase === 'decode' ? 'generating' : ''
   const title = compacting
-    ? 'Compacting the prompt (summarising old context)'
+    ? compactPct !== null && !gauge
+      ? `Compacting the prompt · summary ${Math.round(compactPct * 100)}%`
+      : 'Compacting the prompt (summarising old context)'
     : gauge
       ? `Processing prompt · ${Math.round(pct * 100)}%`
       : st?.phase === 'decode'
@@ -104,7 +121,7 @@ export function Dial({ status }: DialProps) {
             />
           </g>
         )}
-        {gauge ? (
+        {gauge || compactGauge ? (
           <text
             x={17}
             y={17.5}

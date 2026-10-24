@@ -46,6 +46,7 @@ const IDLE: Omit<ModelStatus, 'phase' | 'at'> = {
   decoded: null,
   decodeTps: null,
   compacting: false,
+  compactPercent: null,
 }
 
 class ModelDialController {
@@ -68,6 +69,11 @@ class ModelDialController {
   private sessionOffset = 0
   private compactingId: string | null = null
   private compactingSince: number | null = null
+  /**
+   * Last summary percent of the running compaction, held across the brief
+   * slot-idle tail between the last token and the compaction/end event.
+   */
+  private lastCompactPercent: number | null = null
 
   constructor() {
     this.timer = setInterval(() => {
@@ -297,9 +303,39 @@ class ModelDialController {
     return l
   }
 
+  /**
+   * Summary progress of the running compaction, 0..1: generated tokens over
+   * the summarisation budget. The compaction is a single request on the
+   * slot, and while it runs the slot reports the request's own cap
+   * (params.max_tokens) and the live n_decoded — that ratio is the percent.
+   * Held in lastCompactPercent across the slot-idle tail (last token ->
+   * compaction/end event); null when unknown so the dial can spin.
+   */
+  private compactPercentFor(slot: Record<string, unknown> | null, compacting: boolean): number | null {
+    if (!compacting) {
+      this.lastCompactPercent = null
+      return null
+    }
+    if (slot !== null && slot.is_processing === true) {
+      const nextToken = (slot.next_token as Array<Record<string, unknown>> | undefined)?.[0]
+      const decoded = typeof nextToken?.n_decoded === 'number' ? nextToken.n_decoded : null
+      const params = slot.params as Record<string, unknown> | undefined
+      const cap = typeof params?.max_tokens === 'number'
+        ? params.max_tokens
+        : typeof params?.n_predict === 'number'
+          ? params.n_predict
+          : null
+      if (decoded !== null && typeof cap === 'number' && cap > 0) {
+        this.lastCompactPercent = Math.min(1, Math.max(0, decoded / cap))
+      }
+    }
+    return this.lastCompactPercent
+  }
+
   private synthesize(slot: Record<string, unknown> | null): void {
     const now = Date.now()
     const compacting = this.isCompacting()
+    const compactPercent = this.compactPercentFor(slot, compacting)
     const stale = !slot || now - this.slotsAt > STALE_MS
     const s = (slot ?? {}) as Record<string, unknown>
     const task = typeof s.id_task === 'number' ? s.id_task : null
@@ -312,7 +348,7 @@ class ModelDialController {
     const decoded = typeof nextToken?.n_decoded === 'number' ? nextToken.n_decoded : 0
     const processed = typeof s.n_prompt_tokens_processed === 'number' ? s.n_prompt_tokens_processed : null
     if (s.is_processing !== true) {
-      this.state = { phase: 'idle', at: now, ...IDLE, contextTokens, compacting }
+      this.state = { phase: 'idle', at: now, ...IDLE, contextTokens, compacting, compactPercent }
       return
     }
     if (decoded > 0) {
@@ -330,6 +366,7 @@ class ModelDialController {
         decoded,
         decodeTps: dl?.tg3 ?? null,
         compacting,
+        compactPercent,
       }
       return
     }
@@ -347,6 +384,7 @@ class ModelDialController {
       decoded: null,
       decodeTps: null,
       compacting,
+      compactPercent,
     }
   }
 }
