@@ -5,6 +5,8 @@
  *                  summarisation budget), % in the middle; blind slow spin
  *                  while that percent is unknown (the harness summarises
  *                  old context)
+ *   starting   -> amber spin + "starting model…" while the model manager
+ *                  cold-starts the local server (a few minutes)
  *   otherwise  -> grey ring with a dot (idle, generating, or server down)
  * A small task label ("prompt processing" / "generating" / "compacting")
  * sits to the right while work is active, and nothing when idle.
@@ -49,8 +51,10 @@ export function Dial({ status }: DialProps) {
   const compactPct = typeof compactRaw === 'number' && Number.isFinite(compactRaw) ? compactRaw : null
   /** Compacting with a summary percent: static amber ring, % in the middle. */
   const compactGauge = compacting && !gauge && compactPct !== null
-  /** Compacting without a percent to show: an amber arc circles slowly. */
-  const spin = compacting && !gauge && !compactGauge
+  /** The model manager is cold-starting the server (a few minutes). */
+  const starting = st?.phase === 'starting'
+  /** An amber arc circles slowly while compacting (no percent) or starting. */
+  const spin = (compacting || starting) && !gauge && !compactGauge
   const color = gauge || spin || compactGauge ? '#f59e0b' : '#6b7280'
   const arc = gauge
     ? Math.min(1, Math.max(0.02, pct))
@@ -65,18 +69,21 @@ export function Dial({ status }: DialProps) {
   /** Small task label shown to the right of the ring while work is active. */
   const label = compacting ? 'compacting'
     : gauge ? 'prompt processing'
-      : st?.phase === 'decode' ? 'generating' : ''
+      : starting ? 'starting model…'
+        : st?.phase === 'decode' ? 'generating' : ''
   const title = compacting
     ? compactPct !== null && !gauge
       ? `Compacting the prompt · summary ${Math.round(compactPct * 100)}%`
       : 'Compacting the prompt (summarising old context)'
-    : gauge
-      ? `Processing prompt · ${Math.round(pct * 100)}%`
-      : st?.phase === 'decode'
-        ? 'Generating'
-        : st?.phase === 'down'
-          ? 'Model server unreachable at 127.0.0.1:8080'
-          : 'No active processing'
+    : starting
+      ? 'Starting the local model server (cold start takes a few minutes)'
+      : gauge
+        ? `Processing prompt · ${Math.round(pct * 100)}%`
+        : st?.phase === 'decode'
+          ? 'Generating'
+          : st?.phase === 'down'
+            ? 'Model server unreachable at 127.0.0.1:8080'
+            : 'No active processing'
 
   return (
     <div

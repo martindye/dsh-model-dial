@@ -1,6 +1,11 @@
 /** Shared status shape published by the host half and consumed by the client dial. */
 
-export type DialPhase = 'idle' | 'prefill' | 'decode' | 'down'
+/**
+ * 'starting' is set while the local model manager has the server down and is
+ * cold-starting it (it reports the launch state over its /health endpoint);
+ * the dial shows the wait explicitly instead of a bare "down".
+ */
+export type DialPhase = 'idle' | 'prefill' | 'decode' | 'down' | 'starting'
 
 export interface ModelStatus {
   /** What the model is doing right now. */

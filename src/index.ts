@@ -5,6 +5,9 @@
  * live state of the local llama-server:
  *   - GET /slots on 127.0.0.1:8080  -> phase, task id, context size, decoded count
  *   - tail of the server's log file -> prefill progress %, prompt t/s, decode t/s
+ *   - GET /health on 127.0.0.1:8081 -> the model manager's launch state, so a
+ *     cold start is reported as phase "starting" (the wait the user is in)
+ *     instead of a bare "down"
  *
  * The dial is decorative: nothing here may ever throw out of the poll loop,
  * and a dead server simply reports phase "down".
@@ -24,8 +27,12 @@ const PORT = Number(process.env.DSH_DIAL_PORT ?? 8080)
 const LOG_DIR = process.env.DSH_DIAL_LOG_DIR ?? 'C:/Users/press/OneDrive/Projects/TurboQuantLlamaCppSetup/logs'
 const SESSIONS_DIR = process.env.DSH_DIAL_SESSIONS_DIR ?? path.join(os.homedir(), '.dsh', 'sessions')
 const SLOTS_URL = `http://127.0.0.1:${PORT}/slots`
+/** The model manager's launch state (its proxy port, /health endpoint). */
+const MANAGER_URL = process.env.DSH_DIAL_MANAGER_URL ?? 'http://127.0.0.1:8081/health'
 const POLL_MS = 750
 const STALE_MS = 4000
+/** A "starting" report older than this is stale (a launch always settles). */
+const STARTING_TTL_MS = 10 * 60_000
 /** A compaction without its end event is dropped after this long. */
 const COMPACT_TTL_MS = 15 * 60_000
 /** Trailing window replayed when attaching to a (new) session log. */
@@ -59,6 +66,9 @@ class ModelDialController {
   private state: ModelStatus = { phase: 'idle', at: 0, ...IDLE }
   private ticking = false
   private slotsAt = 0
+  /** The model manager's launch state, from its /health endpoint. */
+  private managerState: { kind: string; since: number; detail: string } | null = null
+  private managerAt = 0
   private logFile: string | null = null
   private logOffset = 0
   private tail = ''
@@ -91,7 +101,7 @@ class ModelDialController {
     if (this.ticking) return
     this.ticking = true
     try {
-      const slot = await this.fetchSlot()
+      const [slot] = await Promise.all([this.fetchSlot(), this.fetchManager()])
       this.scanLog()
       this.scanSessionLog()
       this.synthesize(slot)
@@ -112,6 +122,37 @@ class ModelDialController {
     } catch {
       return null
     }
+  }
+
+  /**
+   * The model manager's launch state. Only a fresh 'starting' report (the
+   * manager is mid-cold-start and holding the request) is kept; anything else
+   * — or a manager that is not installed — leaves the dial to its /slots view.
+   */
+  private async fetchManager(): Promise<void> {
+    try {
+      const res = await fetch(MANAGER_URL, { signal: AbortSignal.timeout(2500) })
+      if (!res.ok) return
+      const body = (await res.json()) as { ok?: boolean; kind?: string; since?: number; detail?: string }
+      if (body.ok !== true || typeof body.kind !== 'string') return
+      this.managerState = {
+        kind: body.kind,
+        since: typeof body.since === 'number' ? body.since : 0,
+        detail: typeof body.detail === 'string' ? body.detail : '',
+      }
+      this.managerAt = Date.now()
+    } catch {
+      // No manager (or it is down): fall back to the pure /slots view.
+      this.managerState = null
+    }
+  }
+
+  private starting(): boolean {
+    const m = this.managerState
+    if (!m || m.kind !== 'starting') return false
+    if (Date.now() - m.since > STARTING_TTL_MS) return false
+    if (this.managerAt === 0 || Date.now() - this.managerAt > STALE_MS * 5) return false
+    return true
   }
 
   /** Read newly appended bytes from the newest llama-server log (UTF-16LE). */
@@ -341,7 +382,10 @@ class ModelDialController {
     const task = typeof s.id_task === 'number' ? s.id_task : null
     const contextTokens = typeof s.n_prompt_tokens === 'number' ? s.n_prompt_tokens : null
     if (stale) {
-      this.state = { phase: 'down', at: now, ...IDLE, compacting }
+      // The server is down or unreachable: if the manager is mid-launch, say
+      // so ("starting") instead of a bare "down" — that is the wait the user
+      // is actually in.
+      this.state = { phase: this.starting() ? 'starting' : 'down', at: now, ...IDLE, compacting }
       return
     }
     const nextToken = (s.next_token as Array<Record<string, unknown>> | undefined)?.[0]
